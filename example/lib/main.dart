@@ -7,9 +7,12 @@ import 'package:flutter/services.dart';
 import 'package:convert/convert.dart';
 import 'package:flutter_monocypher/flutter_monocypher.dart' as flutter_monocypher;
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await flutter_monocypher.initWeb();
   runApp(const MyApp());
 }
+
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
