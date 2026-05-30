@@ -1,0 +1,16 @@
+# Run with `dart run ffigen --config ffigen.yaml`.
+name: FlutterMonocypherBindings
+description: |
+  Bindings for `src/flutter_monocypher.h`.
+
+  Regenerate bindings with `dart run ffigen --config ffigen.yaml`.
+output: 'lib/src/internal/bindings.generated.dart'
+headers:
+  entry-points:
+    - 'src/monocypher/monocypher.h'
+  include-directives:
+    - 'src/monocypher/monocypher.h'
+ffi-native:
+comments:
+  style: any
+  length: full
