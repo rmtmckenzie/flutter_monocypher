@@ -70,16 +70,12 @@ Future<SendPort> generateSendPort() {
 }
 
 Future<R> callAsync<A, R>(A args, R Function(A args) func) async {
-  print("About to generate send port");
   final SendPort helperIsolateSendPort = await generateSendPort();
-  print("Received send port");
   final int requestId = _nextRequestId++;
   final data = _SendFuncData(requestId, args, func);
   final completer = Completer<R>();
   _sendRequests[requestId] = completer;
-  print("Sending data $data");
   helperIsolateSendPort.send(data);
-  print("Sent data!");
   return completer.future;
 }
 

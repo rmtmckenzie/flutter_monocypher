@@ -88,7 +88,7 @@ class _SigningScreenState extends State<SigningScreen> {
     _signatureController.addListener(_verifySignature);
 
     // Generate an initial keypair so the app has one ready
-    _generateNewKeyPair();
+    // _generateNewKeyPair();
   }
 
   @override

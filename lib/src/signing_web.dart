@@ -1,6 +1,7 @@
 import 'dart:js_interop';
 import 'dart:math';
 import 'dart:typed_data';
+import 'signing_base.dart';
 
 @JS('fetch')
 external JSPromise<JSObject> jsFetch(JSString url);
@@ -26,7 +27,8 @@ extension type WebAssemblyInstance._(JSObject _) implements JSObject {
 }
 
 extension type MonocypherExports._(JSObject _) implements JSObject {
-  external JSFunction get get_wasm_memory;
+  external JSFunction get wasm_malloc;
+  external JSFunction get wasm_free;
   external JSFunction get crypto_eddsa_key_pair;
   external JSFunction get crypto_eddsa_sign;
   external JSFunction get crypto_eddsa_check;
@@ -35,17 +37,6 @@ extension type MonocypherExports._(JSObject _) implements JSObject {
 
 extension type JSMemory._(JSObject _) implements JSObject {
   external JSArrayBuffer get buffer;
-}
-
-class CryptoSignKeyPair {
-  CryptoSignKeyPair({
-    required this.publicKey,
-    required this.secretKey,
-  })  : assert(publicKey.lengthInBytes == 32),
-        assert(secretKey.lengthInBytes == 64);
-
-  final Uint8List publicKey;
-  final Uint8List secretKey;
 }
 
 MonocypherExports? _exportsInstance;
@@ -84,106 +75,118 @@ Future<void> initWeb() async {
   }
 }
 
-CryptoSignKeyPair cryptoGenerateSignPair(Random random) {
-  final exp = _exports;
-  final memoryOffset = (exp.get_wasm_memory.callAsFunction() as JSNumber).toDartInt;
-  final buffer = exp.memory.buffer.toDart.asUint8List();
+class WebCryptoPointer implements CryptoPointer {
+  WebCryptoPointer(this.address, this.buffer, this.onFree);
 
-  // Offset mappings inside 64KB static buffer:
-  // - 0 to 64: secret key (64 bytes)
-  // - 64 to 96: public key (32 bytes)
-  // - 96 to 128: seed (32 bytes)
-  final secretKeyOffset = memoryOffset;
-  final publicKeyOffset = memoryOffset + 64;
-  final seedOffset = memoryOffset + 96;
+  final int address;
+  final Uint8List buffer;
+  final void Function(int address) onFree;
 
-  // Generate 32-byte seed from random
-  final seed = Uint8List(32);
-  for (var i = 0; i < 32; i++) {
-    seed[i] = random.nextInt(256);
+  @override
+  Uint8List asTypedList(int length) {
+    return buffer.buffer.asUint8List(address, length);
   }
-  buffer.setRange(seedOffset, seedOffset + 32, seed);
 
-  exp.crypto_eddsa_key_pair.callAsFunction(
-    null,
-    secretKeyOffset.toJS,
-    publicKeyOffset.toJS,
-    seedOffset.toJS,
-  );
 
-  final publicKey = Uint8List.fromList(buffer.sublist(publicKeyOffset, publicKeyOffset + 32));
-  final secretKey = Uint8List.fromList(buffer.sublist(secretKeyOffset, secretKeyOffset + 64));
-
-  // Wipe the seed and secret key in static buffer for security
-  buffer.fillRange(secretKeyOffset, secretKeyOffset + 64, 0);
-  buffer.fillRange(seedOffset, seedOffset + 32, 0);
-
-  return CryptoSignKeyPair(publicKey: publicKey, secretKey: secretKey);
+  @override
+  void free() {
+    onFree(address);
+  }
 }
 
-List<int> cryptoSign(List<int> message, List<int> secretKey) {
-  assert(secretKey.length == 64);
-  final exp = _exports;
-  final memoryOffset = (exp.get_wasm_memory.callAsFunction() as JSNumber).toDartInt;
-  final buffer = exp.memory.buffer.toDart.asUint8List();
+class WebCryptoAllocator implements CryptoAllocator {
+  WebCryptoAllocator(this.buffer, this.mallocFunc, this.freeFunc);
 
-  // Offset mappings inside 64KB static buffer:
-  // - 0 to 64: signature (64 bytes)
-  // - 64 to 128: secret key (64 bytes)
-  // - 128+: message (up to 65408 bytes)
-  final signatureOffset = memoryOffset;
-  final secretKeyOffset = memoryOffset + 64;
-  final messageOffset = memoryOffset + 128;
+  final Uint8List buffer;
+  final JSFunction mallocFunc;
+  final JSFunction freeFunc;
 
-  buffer.setRange(secretKeyOffset, secretKeyOffset + 64, secretKey);
-  buffer.setRange(messageOffset, messageOffset + message.length, message);
-
-  exp.crypto_eddsa_sign.callAsFunction(
-    null,
-    signatureOffset.toJS,
-    secretKeyOffset.toJS,
-    messageOffset.toJS,
-    message.length.toJS,
-  );
-
-  final signature = Uint8List.fromList(buffer.sublist(signatureOffset, signatureOffset + 64));
-
-  // Wipe secret key and signature area
-  buffer.fillRange(signatureOffset, signatureOffset + 128, 0);
-
-  return signature;
+  @override
+  CryptoPointer allocate(int byteCount) {
+    final ptr = (mallocFunc.callAsFunction(null, byteCount.toJS) as JSNumber).toDartInt;
+    if (ptr == 0) throw OutOfMemoryError();
+    return WebCryptoPointer(ptr, buffer, (address) {
+      freeFunc.callAsFunction(null, address.toJS);
+    });
+  }
 }
 
-bool cryptoSignVerify(List<int> signature, List<int> publicKey, List<int> message) {
-  assert(signature.length == 64);
-  assert(publicKey.length == 32);
+class WebMonocypherBindings implements MonocypherBindings {
+  WebMonocypherBindings(this.exports);
 
-  final exp = _exports;
-  final memoryOffset = (exp.get_wasm_memory.callAsFunction() as JSNumber).toDartInt;
-  final buffer = exp.memory.buffer.toDart.asUint8List();
+  final MonocypherExports exports;
 
-  // Offset mappings inside 64KB static buffer:
-  // - 0 to 64: signature (64 bytes)
-  // - 64 to 96: public key (32 bytes)
-  // - 96+: message
-  final signatureOffset = memoryOffset;
-  final publicKeyOffset = memoryOffset + 64;
-  final messageOffset = memoryOffset + 96;
+  @override
+  void crypto_eddsa_key_pair(
+    CryptoPointer secretKey,
+    CryptoPointer publicKey,
+    CryptoPointer seed,
+  ) {
+    exports.crypto_eddsa_key_pair.callAsFunction(
+      null,
+      (secretKey as WebCryptoPointer).address.toJS,
+      (publicKey as WebCryptoPointer).address.toJS,
+      (seed as WebCryptoPointer).address.toJS,
+    );
+  }
 
-  buffer.setRange(signatureOffset, signatureOffset + 64, signature);
-  buffer.setRange(publicKeyOffset, publicKeyOffset + 32, publicKey);
-  buffer.setRange(messageOffset, messageOffset + message.length, message);
+  @override
+  void crypto_eddsa_sign(
+    CryptoPointer signature,
+    CryptoPointer secretKey,
+    CryptoPointer message,
+    int messageLength,
+  ) {
+    exports.crypto_eddsa_sign.callAsFunction(
+      null,
+      (signature as WebCryptoPointer).address.toJS,
+      (secretKey as WebCryptoPointer).address.toJS,
+      (message as WebCryptoPointer).address.toJS,
+      messageLength.toJS,
+    );
+  }
 
-  final result = exp.crypto_eddsa_check.callAsFunction(
-    null,
-    signatureOffset.toJS,
-    publicKeyOffset.toJS,
-    messageOffset.toJS,
-    message.length.toJS,
-  ) as JSNumber;
-
-  // Clear memory
-  buffer.fillRange(signatureOffset, signatureOffset + 96, 0);
-
-  return result.toDartInt == 0;
+  @override
+  int crypto_eddsa_check(
+    CryptoPointer signature,
+    CryptoPointer publicKey,
+    CryptoPointer message,
+    int messageLength,
+  ) {
+    final result = exports.crypto_eddsa_check.callAsFunction(
+      null,
+      (signature as WebCryptoPointer).address.toJS,
+      (publicKey as WebCryptoPointer).address.toJS,
+      (message as WebCryptoPointer).address.toJS,
+      messageLength.toJS,
+    ) as JSNumber;
+    return result.toDartInt;
+  }
 }
+
+MonocypherSigning? _signingInstance;
+
+MonocypherSigning get _signing {
+  if (_signingInstance == null) {
+    final exp = _exports;
+    final buffer = exp.memory.buffer.toDart.asUint8List();
+    _signingInstance = MonocypherSigning(
+      allocator: WebCryptoAllocator(buffer, exp.wasm_malloc, exp.wasm_free),
+      bindings: WebMonocypherBindings(exp),
+    );
+  }
+  return _signingInstance!;
+}
+
+CryptoSignKeyPair cryptoGenerateSignPair(Random random) =>
+    _signing.cryptoGenerateSignPair(random);
+
+List<int> cryptoSign(List<int> message, List<int> secretKey) =>
+    _signing.cryptoSign(message, secretKey);
+
+bool cryptoSignVerify(
+  List<int> signature,
+  List<int> publicKey,
+  List<int> message,
+) =>
+    _signing.cryptoSignVerify(signature, publicKey, message);

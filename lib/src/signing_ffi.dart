@@ -1,93 +1,95 @@
-import 'dart:ffi';
+import 'dart:ffi' as ffi;
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
-import 'internal/extensions.dart';
+import 'signing_base.dart';
+import 'internal/bindings.generated.dart' as native_bindings;
 
-import 'internal/bindings.generated.dart' as bindings;
+class FfiCryptoPointer implements CryptoPointer {
+  FfiCryptoPointer(this.pointer);
 
-class CryptoSignKeyPair {
-  CryptoSignKeyPair({
-    required this.publicKey,
-    required this.secretKey,
-  })  : assert(publicKey.lengthInBytes == 32),
-        assert(secretKey.lengthInBytes == 64);
+  final ffi.Pointer<ffi.Uint8> pointer;
 
-  final Uint8List publicKey;
-  final Uint8List secretKey;
-}
+  @override
+  Uint8List asTypedList(int length) {
+    return pointer.asTypedList(length);
+  }
 
-CryptoSignKeyPair cryptoGenerateSignPair(Random random) {
-
-  final publicKeyPointer = malloc.allocate<Uint8>(32);
-  final secretKeyPointer = malloc.allocate<Uint8>(64);
-  final seed = malloc.allocate<Uint8>(32);
-
-  try {
-    random.fill(seed, 32);
-    bindings.crypto_eddsa_key_pair(
-      secretKeyPointer,
-      publicKeyPointer,
-      seed,
-    );
-
-    final keypair = CryptoSignKeyPair(
-      publicKey: Uint8List.fromList(publicKeyPointer.asTypedList(32)),
-      secretKey: Uint8List.fromList(secretKeyPointer.asTypedList(64)),
-    );
-
-    bindings.crypto_wipe(secretKeyPointer as Pointer<Void>, 64);
-    return keypair;
-  } finally {
-    malloc.free(publicKeyPointer);
-    malloc.free(secretKeyPointer);
+  @override
+  void free() {
+    malloc.free(pointer);
   }
 }
 
-List<int> cryptoSign(List<int> message, List<int> secretKey) {
-  assert(secretKey.length == 64);
-  final signaturePointer = malloc.allocate<Uint8>(64);
-  final messagePointer = malloc.allocate<Uint8>(message.length)..asTypedList(message.length).setAll(0, message);
-  final secretKeyPointer = malloc.allocate<Uint8>(secretKey.length)..asTypedList(secretKey.length).setAll(0, secretKey);
-
-  try {
-    bindings.crypto_eddsa_sign(
-      signaturePointer,
-      secretKeyPointer,
-      messagePointer,
-      message.length,
-    );
-    bindings.crypto_wipe(secretKeyPointer.cast(), secretKey.length);
-    return Uint8List.fromList(signaturePointer.asTypedList(64));
-  } finally {
-    malloc.free(signaturePointer);
-    malloc.free(messagePointer);
-    malloc.free(secretKeyPointer);
+class FfiCryptoAllocator implements CryptoAllocator {
+  @override
+  CryptoPointer allocate(int byteCount) {
+    return FfiCryptoPointer(malloc.allocate<ffi.Uint8>(byteCount));
   }
 }
 
-bool cryptoSignVerify(List<int> signature, List<int> publicKey, List<int> message) {
-  assert(signature.length == 64);
-  assert(publicKey.length == 32);
-
-  final signaturePointer = malloc.allocate<Uint8>(64)..asTypedList(64).setAll(0, signature);
-  final publicKeyPointer = malloc.allocate<Uint8>(32)..asTypedList(32).setAll(0, publicKey);
-  final messagePointer = malloc.allocate<Uint8>(message.length)..asTypedList(message.length).setAll(0, message);
-
-  try {
-    final result = bindings.crypto_eddsa_check(
-      signaturePointer,
-      publicKeyPointer,
-      messagePointer,
-      message.length,
+class FfiMonocypherBindings implements MonocypherBindings {
+  @override
+  void crypto_eddsa_key_pair(
+    CryptoPointer secretKey,
+    CryptoPointer publicKey,
+    CryptoPointer seed,
+  ) {
+    native_bindings.crypto_eddsa_key_pair(
+      (secretKey as FfiCryptoPointer).pointer,
+      (publicKey as FfiCryptoPointer).pointer,
+      (seed as FfiCryptoPointer).pointer,
     );
-    return result == 0;
-  } finally {
-    malloc.free(signaturePointer);
-    malloc.free(publicKeyPointer);
-    malloc.free(messagePointer);
+  }
+
+  @override
+  void crypto_eddsa_sign(
+    CryptoPointer signature,
+    CryptoPointer secretKey,
+    CryptoPointer message,
+    int messageLength,
+  ) {
+    native_bindings.crypto_eddsa_sign(
+      (signature as FfiCryptoPointer).pointer,
+      (secretKey as FfiCryptoPointer).pointer,
+      (message as FfiCryptoPointer).pointer,
+      messageLength,
+    );
+  }
+
+  @override
+  int crypto_eddsa_check(
+    CryptoPointer signature,
+    CryptoPointer publicKey,
+    CryptoPointer message,
+    int messageLength,
+  ) {
+    return native_bindings.crypto_eddsa_check(
+      (signature as FfiCryptoPointer).pointer,
+      (publicKey as FfiCryptoPointer).pointer,
+      (message as FfiCryptoPointer).pointer,
+      messageLength,
+    );
   }
 }
+
+final _signing = MonocypherSigning(
+  allocator: FfiCryptoAllocator(),
+  bindings: FfiMonocypherBindings(),
+);
+
+CryptoSignKeyPair cryptoGenerateSignPair(Random random) =>
+    _signing.cryptoGenerateSignPair(random);
+
+List<int> cryptoSign(List<int> message, List<int> secretKey) =>
+    _signing.cryptoSign(message, secretKey);
+
+bool cryptoSignVerify(
+  List<int> signature,
+  List<int> publicKey,
+  List<int> message,
+) =>
+    _signing.cryptoSignVerify(signature, publicKey, message);
 
 Future<void> initWeb() async {}
