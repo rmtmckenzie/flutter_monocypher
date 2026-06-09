@@ -1,3 +1,5 @@
+// ignore_for_file: non_constant_identifier_names
+
 import 'dart:ffi' as ffi;
 import 'dart:math';
 import 'dart:typed_data';
@@ -59,6 +61,7 @@ class FfiMonocypherBindings implements MonocypherBindings {
   }
 
   @override
+  @pragma('vm:prefer-inline')
   int crypto_eddsa_check(
     CryptoPointer signature,
     CryptoPointer publicKey,

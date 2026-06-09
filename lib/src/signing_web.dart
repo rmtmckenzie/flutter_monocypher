@@ -1,3 +1,5 @@
+// ignore_for_file: non_constant_identifier_names
+
 import 'dart:js_interop';
 import 'dart:math';
 import 'dart:typed_data';
