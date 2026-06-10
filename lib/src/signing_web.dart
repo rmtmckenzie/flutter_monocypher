@@ -89,7 +89,6 @@ class WebCryptoPointer implements CryptoPointer {
     return buffer.buffer.asUint8List(address, length);
   }
 
-
   @override
   void free() {
     onFree(address);
