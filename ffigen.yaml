@@ -1,4 +1,3 @@
-# Run with `dart run ffigen --config ffigen.yaml`.
 name: FlutterMonocypherBindings
 description: |
   Bindings for `src/monocypher/monocypher.h`.
